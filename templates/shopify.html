@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}STORM X - Shopify Checker{% endblock %}
+
+{% block content %}
+<div class="glass-card p-3 p-md-4">
+    <div class="text-center mb-3">
+        <h3 class="fw-bold"><i class="bi bi-shop me-2"></i>Shopify Checker</h3>
+        <p class="text-muted mb-0">Check cards against Shopify sites</p>
+    </div>
+
+    <!-- Form -->
+    <form id="shopifyForm" enctype="multipart/form-data">
+        <!-- Sites Input -->
+        <div class="mb-3">
+            <label for="sites" class="form-label fw-semibold">Sites <span class="text-danger">*</span></label>
+            <textarea class="form-control" id="sites" name="sites" rows="3"
+                      placeholder="Enter Shopify sites (one per line)" required></textarea>
+            <div class="form-text">Or upload a file:</div>
+            <input type="file" class="form-control mt-1" id="sites_file" name="sites_file" accept=".txt">
+        </div>
+
+        <!-- Cards Input -->
+        <div class="mb-3">
+            <label for="cards" class="form-label fw-semibold">Cards <span class="text-danger">*</span></label>
+            <textarea class="form-control" id="cards" name="cards" rows="3"
+                      placeholder="Enter cards in format: NUMBER|MM|YY|CVV (one per line)" required></textarea>
+            <div class="form-text">Or upload a file:</div>
+            <input type="file" class="form-control mt-1" id="cards_file" name="cards_file" accept=".txt">
+        </div>
+
+        <!-- Proxies Input -->
+        <div class="mb-3">
+            <label for="proxies" class="form-label fw-semibold">Proxies (Optional)</label>
+            <textarea class="form-control" id="proxies" name="proxies" rows="2"
+                      placeholder="Enter proxies in format: ip:port or ip:port:user:pass (one per line)"></textarea>
+            <div class="form-text">Or upload a file:</div>
+            <input type="file" class="form-control mt-1" id="proxies_file" name="proxies_file" accept=".txt">
+        </div>
+
+        <div class="d-grid">
+            <button type="submit" class="btn btn-primary btn-lg" id="checkButton">
+                <i class="bi bi-play-circle"></i> Start Checking
+            </button>
+        </div>
+    </form>
+
+    <!-- Results (Moved Below Form) -->
+    <div id="resultsArea" class="mt-4"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const shopifyForm = document.getElementById('shopifyForm');
+    const resultsArea = document.getElementById('resultsArea');
+    const checkButton = document.getElementById('checkButton');
+
+    let eventSource = null;
+
+    shopifyForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        // Get form data
+        const formData = new FormData(shopifyForm);
+        const sites = formData.get('sites').split('\n').filter(s => s.trim());
+        const cards = formData.get('cards').split('\n').filter(c => c.trim());
+
+        if (!sites.length || !cards.length) {
+            alert('Sites and cards are required!');
+            return;
+        }
+
+        resultsArea.innerHTML = ''; // Clear old results
+        checkButton.disabled = true;
+        checkButton.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Checking...';
+
+        // Start SSE connection
+        const params = new URLSearchParams();
+        params.append('sites', sites.join('\n'));
+        params.append('cards', cards.join('\n'));
+        if (formData.get('proxies')) params.append('proxies', formData.get('proxies'));
+
+        eventSource = new EventSource('/shopify_check?' + params.toString());
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+
+            if (data.complete) {
+                eventSource.close();
+                checkButton.disabled = false;
+                checkButton.innerHTML = '<i class="bi bi-play-circle"></i> Start Checking';
+                return;
+            }
+
+            addResultCard(data);
+        };
+
+        eventSource.onerror = function() {
+            eventSource.close();
+            checkButton.disabled = false;
+            checkButton.innerHTML = '<i class="bi bi-play-circle"></i> Start Checking';
+            alert('Connection error occurred');
+        };
+    });
+
+    function addResultCard(data) {
+        const card = document.createElement('div');
+        card.className = `border rounded p-3 mb-3 result-card shadow-sm`;
+        
+        // Determine badge class based on status
+        let badgeClass = 'secondary';
+        if (data.status === 'HIT' || data.status === 'APPROVED' || data.status === 'true') badgeClass = 'success';
+        else if (data.status === 'DECLINED' || data.status === 'false') badgeClass = 'danger';
+        else if (data.status === 'ERROR') badgeClass = 'warning';
+        
+        // Format the status text for display
+        let statusText = data.status;
+        if (data.status === 'true') statusText = 'APPROVED';
+        if (data.status === 'false') statusText = 'DECLINED';
+
+        card.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="mb-0"><i class="bi bi-shield-check me-2"></i>Check Result</h5>
+                <span class="badge bg-${badgeClass}">${statusText}</span>
+            </div>
+            
+            <div class="result-line">
+                <i class="bi bi-credit-card-2-front me-2 text-primary"></i>
+                <strong>Card:</strong>
+                <span class="ms-1 font-monospace">${data.cc || data.card || 'N/A'}</span>
+            </div>
+            
+            <div class="result-line">
+                <i class="bi bi-cash-coin me-2 text-primary"></i>
+                <strong>Amount:</strong>
+                <span class="ms-1">${data.Price || data.price || data.amount || 'N/A'}</span>
+            </div>
+            
+            <div class="result-line">
+                <i class="bi bi-globe me-2 text-primary"></i>
+                <strong>Site:</strong>
+                <span class="ms-1 text-truncate">${data.site || 'N/A'}</span>
+            </div>
+            
+            <div class="result-line">
+                <i class="bi bi-diagram-3 me-2 text-primary"></i>
+                <strong>Gateway:</strong>
+                <span class="ms-1">${data.Gateway || data.gateway || 'N/A'}</span>
+            </div>
+            
+            <div class="result-line">
+                <i class="bi bi-hdd-stack me-2 text-primary"></i>
+                <strong>Proxy:</strong>
+                <span class="ms-1">${data.proxy || 'N/A'}</span>
+            </div>
+            
+            <div class="result-line mt-2">
+                <i class="bi bi-chat-dots me-2 text-primary"></i>
+                <strong>Response:</strong>
+                <div class="font-monospace small ms-4 mt-1 text-xsmall">${data.Response || data.response || 'N/A'}</div>
+            </div>
+        `;
+
+        resultsArea.prepend(card); // Add new results to the top
+    }
+});
+</script>
+
+<style>
+.result-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    transition: transform 0.2s;
+}
+
+.result-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important;
+}
+
+.result-line {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 8px;
+}
+
+.font-monospace {
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+.text-xsmall {
+    font-size: 0.75rem !important;
+    line-height: 1.2;
+}
+
+.bg-dark {
+    background: rgba(0, 0, 0, 0.2) !important;
+}
+</style>
+{% endblock %}
